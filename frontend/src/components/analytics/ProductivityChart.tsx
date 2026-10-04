@@ -24,7 +24,7 @@ const CustomTooltip = ({ active, payload, label }: any) => {
         <div className="space-y-1">
           <p className="text-sm font-medium text-blue-400 flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-blue-500" />
-            {payload[0].value} Hours Coded
+            {payload[0].value} GitHub Events
           </p>
           <p className="text-sm font-medium text-green-400 flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-green-500" />
@@ -65,12 +65,12 @@ export function ProductivityChart() {
       <div className="mb-6 flex items-center justify-between z-10">
         <div>
           <h2 className="text-lg font-bold text-white/90">Weekly Productivity</h2>
-          <p className="text-sm text-white/40 mt-1">Hours coded vs Tasks completed</p>
+          <p className="text-sm text-white/40 mt-1">GitHub activity vs completed tasks · last 7 days</p>
         </div>
         <div className="flex items-center gap-4 text-xs font-medium text-white/60">
           <div className="flex items-center gap-2">
             <div className="h-2 w-2 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.5)]" />
-            Hours
+            GitHub
           </div>
           <div className="flex items-center gap-2">
             <div className="h-2 w-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(74,222,128,0.5)]" />
@@ -114,7 +114,7 @@ export function ProductivityChart() {
             <Area 
               yAxisId="left"
               type="monotone" 
-              dataKey="hours" 
+              dataKey="github_events" 
               stroke="#3b82f6" 
               strokeWidth={3}
               fillOpacity={1} 
