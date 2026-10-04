@@ -22,10 +22,12 @@ import { Task } from "@/services/task.service";
 import { KanbanColumn } from "./KanbanColumn";
 import { KanbanTaskCard } from "./KanbanTaskCard";
 
+type TaskStatus = "todo" | "in_progress" | "review" | "completed";
+
 interface KanbanBoardProps {
   tasks: Task[];
   onTaskClick?: (taskId: number) => void;
-  onTaskUpdate?: (taskId: number, newStatus: string) => void;
+  onTaskUpdate?: (taskId: number, newStatus: TaskStatus) => void;
 }
 
 const COLUMNS = [
@@ -81,16 +83,16 @@ export function KanbanBoard({ tasks, onTaskClick, onTaskUpdate }: KanbanBoardPro
     
     // Check if dropping over a column or another task
     const overId = over.id as string | number;
-    let newStatus = "";
+    let newStatus: TaskStatus | null = null;
 
     // If dropped over a column id
     if (COLUMNS.find(c => c.id === overId)) {
-      newStatus = overId as string;
+      newStatus = overId as TaskStatus;
     } else {
       // If dropped over another task
       const overTask = tasks.find(t => t.id === overId);
       if (overTask) {
-        newStatus = overTask.status;
+        newStatus = overTask.status as TaskStatus;
       }
     }
 

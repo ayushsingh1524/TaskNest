@@ -1,90 +1,109 @@
-import json
 import asyncio
-from typing import Dict, List
+import json
+import logging
+from typing import Dict, List, Optional
+
 from fastapi import WebSocket
 from app.core.redis import redis_client
 
+logger = logging.getLogger(__name__)
+EVENT_CHANNEL = "tasknest:events"
+
+
 class ConnectionManager:
     def __init__(self):
-        # Maps user_id -> List of active WebSocket connections
         self.active_connections: Dict[int, List[WebSocket]] = {}
-        self.pubsub_task = None
 
     async def connect(self, websocket: WebSocket, user_id: int):
         await websocket.accept()
-        if user_id not in self.active_connections:
-            self.active_connections[user_id] = []
-        self.active_connections[user_id].append(websocket)
+        self.active_connections.setdefault(user_id, []).append(websocket)
 
     def disconnect(self, websocket: WebSocket, user_id: int):
-        if user_id in self.active_connections:
-            if websocket in self.active_connections[user_id]:
-                self.active_connections[user_id].remove(websocket)
-            if not self.active_connections[user_id]:
-                del self.active_connections[user_id]
+        connections = self.active_connections.get(user_id)
+        if not connections:
+            return
+        if websocket in connections:
+            connections.remove(websocket)
+        if not connections:
+            self.active_connections.pop(user_id, None)
 
     async def send_personal_message(self, message: dict, user_id: int):
-        """Send message to all connections of a specific user."""
-        if user_id in self.active_connections:
-            dead_connections = []
-            for connection in self.active_connections[user_id]:
-                try:
-                    await connection.send_json(message)
-                except Exception:
-                    dead_connections.append(connection)
-            
-            for dead in dead_connections:
-                self.disconnect(dead, user_id)
+        dead_connections: List[WebSocket] = []
+        for connection in list(self.active_connections.get(user_id, [])):
+            try:
+                await connection.send_json(message)
+            except Exception:
+                dead_connections.append(connection)
+        for dead in dead_connections:
+            self.disconnect(dead, user_id)
 
     async def broadcast(self, message: dict):
-        """Send message to all connected clients."""
-        for user_id, connections in list(self.active_connections.items()):
+        for user_id in list(self.active_connections):
             await self.send_personal_message(message, user_id)
 
-    async def publish_event(self, event_type: str, payload: dict, target_users: List[int] = None):
-        """
-        Publish an event to Redis so that all backend workers receive it and 
-        can route it to connected WebSockets.
-        """
-        if not redis_client.redis:
-            # Fallback if Redis is not configured: just send it locally
-            event = {"type": event_type, "payload": payload, "targets": target_users}
-            if target_users:
-                for uid in target_users:
-                    await self.send_personal_message(event, uid)
-            else:
-                await self.broadcast(event)
-            return
+    async def _deliver(self, event: dict):
+        targets = event.get("targets")
+        if targets:
+            for uid in targets:
+                await self.send_personal_message(event, int(uid))
+        else:
+            await self.broadcast(event)
 
-        event = {
-            "type": event_type,
-            "payload": payload,
-            "targets": target_users
-        }
-        await redis_client.redis.publish("devtrack:events", json.dumps(event))
+    async def publish_event(
+        self,
+        event_type: str,
+        payload: dict,
+        target_users: Optional[List[int]] = None,
+    ):
+        event = {"type": event_type, "payload": payload, "targets": target_users}
+        if not redis_client.redis:
+            await self._deliver(event)
+            return
+        try:
+            await redis_client.redis.publish(EVENT_CHANNEL, json.dumps(event))
+        except Exception as exc:
+            logger.warning("Redis publish failed; delivering locally: %s", exc)
+            await self._deliver(event)
 
     async def listen_to_redis(self):
-        """Background task that listens to Redis Pub/Sub."""
-        if not redis_client.redis:
-            return
-            
-        pubsub = redis_client.redis.pubsub()
-        await pubsub.subscribe("devtrack:events")
-        
-        try:
-            async for message in pubsub.listen():
-                if message["type"] == "message":
-                    data = json.loads(message["data"])
-                    targets = data.get("targets")
-                    
-                    if targets:
-                        for uid in targets:
-                            await self.send_personal_message(data, uid)
-                    else:
-                        await self.broadcast(data)
-        except Exception as e:
-            print(f"Redis PubSub Error: {e}")
-            await asyncio.sleep(5)
-            # Reconnect logic could go here
+        """Listen forever and reconnect with bounded exponential backoff."""
+        delay = 1
+        while True:
+            pubsub = None
+            try:
+                if not redis_client.redis:
+                    await redis_client.init_redis()
+                if not redis_client.redis:
+                    await asyncio.sleep(delay)
+                    delay = min(delay * 2, 30)
+                    continue
+
+                pubsub = redis_client.redis.pubsub()
+                await pubsub.subscribe(EVENT_CHANNEL)
+                delay = 1
+                async for message in pubsub.listen():
+                    if message.get("type") != "message":
+                        continue
+                    try:
+                        data = json.loads(message["data"])
+                    except (TypeError, json.JSONDecodeError):
+                        logger.warning("Ignoring malformed Redis event")
+                        continue
+                    await self._deliver(data)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("Redis Pub/Sub disconnected: %s", exc)
+                await redis_client.close()
+                redis_client.redis = None
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 30)
+            finally:
+                if pubsub is not None:
+                    try:
+                        await pubsub.aclose()
+                    except Exception:
+                        pass
+
 
 manager = ConnectionManager()

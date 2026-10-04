@@ -22,7 +22,7 @@ class ProjectGithubRepo(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
-    repo_full_name = Column(String, nullable=False) # e.g. "ayushsingh1524/DevTrack"
+    repo_full_name = Column(String, nullable=False) # e.g. "owner/TaskNest"
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     project = relationship("Project", back_populates="github_repos")

@@ -1,41 +1,62 @@
 "use client";
 
 import React, { useState } from "react";
-import { GitBranch, GitCommit, Link2, ExternalLink, Plus } from "lucide-react";
+import {
+  ExternalLink,
+  GitBranch,
+  GitCommit,
+  GitPullRequest,
+  Link2,
+  Plus,
+  Unlink,
+} from "lucide-react";
 import { format } from "date-fns";
 import { Button } from "@/components/ui/button";
+import {
+  GithubActivity,
+  ProjectGithubRepo,
+} from "@/services/project.service";
 
 interface ProjectGithubActivityProps {
-  repos: any[];
-  activities: any[];
+  repos: ProjectGithubRepo[];
+  activities: GithubActivity[];
   onAddRepo?: (repoFullName: string) => void;
+  onRemoveRepo?: (repoId: number) => void;
+  isLinking?: boolean;
+  isUnlinking?: boolean;
 }
 
-export function ProjectGithubActivity({ repos, activities, onAddRepo }: ProjectGithubActivityProps) {
+export function ProjectGithubActivity({
+  repos,
+  activities,
+  onAddRepo,
+  onRemoveRepo,
+  isLinking = false,
+  isUnlinking = false,
+}: ProjectGithubActivityProps) {
   const [newRepo, setNewRepo] = useState("");
   const [isAdding, setIsAdding] = useState(false);
 
   const handleAdd = () => {
-    if (newRepo.trim() && onAddRepo) {
-      onAddRepo(newRepo.trim());
-      setNewRepo("");
-      setIsAdding(false);
-    }
+    const repoFullName = newRepo.trim();
+    if (!repoFullName || !onAddRepo) return;
+    onAddRepo(repoFullName);
+    setNewRepo("");
+    setIsAdding(false);
   };
 
   return (
     <div className="space-y-6">
-      {/* Linked Repositories */}
       <div className="bg-[#121216] border border-white/5 rounded-xl p-5">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-sm font-semibold text-white flex items-center gap-2">
             <GitBranch size={16} className="text-white/40" />
             Linked Repositories
           </h3>
-          <Button 
-            variant="ghost" 
-            size="sm" 
-            onClick={() => setIsAdding(!isAdding)}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setIsAdding((value) => !value)}
             className="h-8 text-xs text-primary hover:bg-primary/10"
           >
             <Plus size={14} className="mr-1" /> Add Repo
@@ -47,11 +68,21 @@ export function ProjectGithubActivity({ repos, activities, onAddRepo }: ProjectG
             <input
               type="text"
               value={newRepo}
-              onChange={(e) => setNewRepo(e.target.value)}
-              placeholder="e.g. owner/repo"
+              onChange={(event) => setNewRepo(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") handleAdd();
+              }}
+              placeholder="e.g. owner/repository"
               className="flex-1 bg-black/20 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-primary"
             />
-            <Button size="sm" onClick={handleAdd} className="h-[34px]">Link</Button>
+            <Button
+              size="sm"
+              onClick={handleAdd}
+              disabled={isLinking || !newRepo.trim()}
+              className="h-[34px]"
+            >
+              {isLinking ? "Linking..." : "Link"}
+            </Button>
           </div>
         )}
 
@@ -62,61 +93,100 @@ export function ProjectGithubActivity({ repos, activities, onAddRepo }: ProjectG
         ) : (
           <div className="space-y-2">
             {repos.map((repo) => (
-              <div key={repo.id} className="flex items-center justify-between p-3 rounded-lg bg-white/[0.02] border border-white/5">
-                <div className="flex items-center gap-3 text-sm text-white/80">
-                  <Link2 size={14} className="text-white/40" />
-                  <span>{repo.repo_full_name}</span>
+              <div
+                key={repo.id}
+                className="flex items-center justify-between gap-3 p-3 rounded-lg bg-white/[0.02] border border-white/5"
+              >
+                <div className="flex min-w-0 items-center gap-3 text-sm text-white/80">
+                  <Link2 size={14} className="shrink-0 text-white/40" />
+                  <span className="truncate">{repo.repo_full_name}</span>
                 </div>
-                <a 
-                  href={`https://github.com/${repo.repo_full_name}`} 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                  className="text-white/40 hover:text-white"
-                >
-                  <ExternalLink size={14} />
-                </a>
+                <div className="flex items-center gap-1">
+                  <a
+                    href={`https://github.com/${repo.repo_full_name}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label={`Open ${repo.repo_full_name} on GitHub`}
+                    className="p-2 text-white/40 hover:text-white transition-colors"
+                  >
+                    <ExternalLink size={14} />
+                  </a>
+                  {onRemoveRepo && (
+                    <button
+                      type="button"
+                      disabled={isUnlinking}
+                      onClick={() => {
+                        if (confirm(`Unlink ${repo.repo_full_name} from this project?`)) {
+                          onRemoveRepo(repo.id);
+                        }
+                      }}
+                      className="p-2 text-white/30 hover:text-red-400 disabled:opacity-40 transition-colors"
+                      aria-label={`Unlink ${repo.repo_full_name}`}
+                    >
+                      <Unlink size={14} />
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
           </div>
         )}
       </div>
 
-      {/* Activity Feed */}
       <div>
         <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
           <GitCommit size={16} className="text-white/40" />
-          Recent Activity
+          Recent Development Activity
         </h3>
 
         {activities.length === 0 ? (
           <div className="text-center py-8 border border-dashed border-white/10 rounded-xl bg-[#121216]">
-            <p className="text-white/40 text-sm">No recent activity found.</p>
+            <p className="text-white/40 text-sm">No GitHub activity recorded yet.</p>
           </div>
         ) : (
-          <div className="relative pl-4 space-y-6 before:absolute before:inset-y-0 before:left-6 before:w-px before:bg-white/10">
-            {activities.slice(0, 10).map((activity) => (
-              <div key={activity.id} className="relative flex items-start gap-4">
-                <div className="absolute -left-[9px] top-1 h-2.5 w-2.5 rounded-full border-2 border-[#0a0a0c] bg-primary shadow-[0_0_0_4px_#0a0a0c]" />
-                
-                <div className="flex-1 bg-[#121216] border border-white/5 rounded-xl p-4">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <p className="text-sm text-white/90 font-medium">
-                        {activity.title}
-                      </p>
-                      <div className="flex items-center gap-2 mt-1.5 text-xs text-white/40">
-                        <span className="text-primary/80">{activity.ref_id}</span>
-                        <span>•</span>
-                        <span>{activity.author}</span>
+          <div className="relative pl-4 space-y-5 before:absolute before:inset-y-0 before:left-6 before:w-px before:bg-white/10">
+            {activities.slice(0, 12).map((activity) => {
+              const isPullRequest = activity.activity_type === "pull_request";
+              return (
+                <div key={activity.id} className="relative flex items-start gap-4">
+                  <div className="absolute -left-[10px] top-4 h-3 w-3 rounded-full border-2 border-[#0a0a0c] bg-primary shadow-[0_0_0_4px_#0a0a0c]" />
+                  <div className="flex-1 bg-[#121216] border border-white/5 rounded-xl p-4">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          {isPullRequest ? (
+                            <GitPullRequest size={14} className="shrink-0 text-violet-400" />
+                          ) : (
+                            <GitCommit size={14} className="shrink-0 text-primary" />
+                          )}
+                          <p className="truncate text-sm text-white/90 font-medium">
+                            {activity.title}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2 mt-1.5 text-xs text-white/40">
+                          <span className="text-primary/80">{activity.ref_id}</span>
+                          <span>•</span>
+                          <span>{activity.author}</span>
+                        </div>
                       </div>
+                      <span className="text-xs text-white/30 whitespace-nowrap">
+                        {format(new Date(activity.timestamp), "MMM d, HH:mm")}
+                      </span>
                     </div>
-                    <span className="text-xs text-white/30 whitespace-nowrap">
-                      {format(new Date(activity.timestamp), "MMM d, HH:mm")}
-                    </span>
+                    {activity.url && (
+                      <a
+                        href={activity.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 mt-3 text-xs text-white/35 hover:text-primary transition-colors"
+                      >
+                        View on GitHub <ExternalLink size={11} />
+                      </a>
+                    )}
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

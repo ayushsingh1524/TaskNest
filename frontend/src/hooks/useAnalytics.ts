@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { analyticsService } from "@/services/analytics.service";
+import { analyticsService, getAnalyticsInsights } from "@/services/analytics.service";
 
 export const useAnalyticsOverview = () => {
   return useQuery({
@@ -24,3 +24,12 @@ export const useAnalyticsProductivity = () => {
     staleTime: 5 * 60 * 1000,
   });
 };
+
+
+export function useAnalyticsInsights() {
+  return useQuery({
+    queryKey: ["analytics", "insights"],
+    queryFn: getAnalyticsInsights,
+    staleTime: 5 * 60 * 1000,
+  });
+}

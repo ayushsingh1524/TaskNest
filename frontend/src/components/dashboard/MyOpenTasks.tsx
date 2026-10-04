@@ -39,7 +39,7 @@ export function MyOpenTasks() {
         {openTasks.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-white/30 text-sm space-y-2">
             <CheckCircle2 size={32} className="opacity-20" />
-            <p>You're all caught up!</p>
+            <p>You&apos;re all caught up!</p>
           </div>
         ) : (
           openTasks.map(task => (

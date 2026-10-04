@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo } from "react";
+import React from "react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import { GithubStats } from "@/services/github.service";
 import { motion } from "framer-motion";
@@ -29,14 +29,15 @@ interface LanguageDonutChartProps {
 const COLORS = ["#3178c6", "#3572A5", "#dea584", "#00ADD8", "#e34c26", "#f1e05a", "#b07219"];
 
 export function LanguageDonutChart({ stats, isSyncing }: LanguageDonutChartProps) {
-  const chartData = useMemo(() => {
-    if (!stats?.top_languages) return [];
-    return Object.entries(stats.top_languages).map(([name, value], index) => ({
-      name,
-      value,
-      color: COLORS[index % COLORS.length]
-    })).sort((a, b) => b.value - a.value);
-  }, [stats?.top_languages]);
+  const chartData = !stats?.top_languages
+    ? []
+    : Object.entries(stats.top_languages)
+        .map(([name, value], index) => ({
+          name,
+          value,
+          color: COLORS[index % COLORS.length],
+        }))
+        .sort((a, b) => b.value - a.value);
 
   return (
     <motion.div

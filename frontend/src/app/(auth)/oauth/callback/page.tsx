@@ -15,7 +15,6 @@ export default function OAuthCallbackPage() {
 
   useEffect(() => {
     const handleCallback = async () => {
-      const token = searchParams.get("token");
       const error = searchParams.get("error");
 
       if (error) {
@@ -24,20 +23,13 @@ export default function OAuthCallbackPage() {
         return;
       }
 
-      if (!token) {
-        toast.error("No authentication token received.");
-        router.push("/login");
-        return;
-      }
-
       try {
-        // Temporarily set the access token so the API client can use it
+        // Exchange the HttpOnly refresh cookie for an in-memory access token.
+        const tokenData = await authService.refresh();
+        const token = tokenData.access_token;
         useAuthStore.getState().setAccessToken(token);
-        
-        // Fetch the user profile using the new token
+
         const user = await authService.getCurrentUser();
-        
-        // Store both in the auth store
         setAuth(user, token);
         
         toast.success("Successfully logged in!");

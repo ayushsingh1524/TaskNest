@@ -12,6 +12,7 @@ from app.core.config import settings
 from app.models.user import User
 from app.schemas.user import UserResponse
 from app.models.task import Task, TaskComment, TaskActivity
+from app.models.project import Project
 from app.schemas.task import (
     TaskCreate, TaskUpdate, TaskResponse,
     CommentCreate, CommentResponse, ActivityResponse
@@ -60,7 +61,7 @@ async def get_tasks(
         selectinload(Task.assignee)
     )
     
-    filters = []
+    filters = [or_(Task.owner_id == current_user.id, Task.assignee_id == current_user.id)]
     
     if status:
         filters.append(Task.status == status)
@@ -97,6 +98,23 @@ async def create_task(
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user)
 ):
+    if task_in.project_id is not None:
+        project_result = await db.execute(
+            select(Project.id).where(
+                Project.id == task_in.project_id,
+                Project.user_id == current_user.id,
+            )
+        )
+        if project_result.scalar_one_or_none() is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+    if task_in.assignee_id is not None:
+        assignee_result = await db.execute(
+            select(User.id).where(User.id == task_in.assignee_id)
+        )
+        if assignee_result.scalar_one_or_none() is None:
+            raise HTTPException(status_code=404, detail="Assignee not found")
+
     task = Task(
         title=task_in.title,
         description=task_in.description,
@@ -148,6 +166,23 @@ async def create_task(
     return task_loaded
 
 
+@router.get("/users/list", response_model=List[UserResponse])
+async def get_assignees(
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_user)
+):
+    assigned_user_ids = select(Task.assignee_id).where(
+        Task.owner_id == current_user.id,
+        Task.assignee_id.is_not(None),
+    )
+    result = await db.execute(
+        select(User)
+        .where((User.id == current_user.id) | User.id.in_(assigned_user_ids))
+        .order_by(User.username.asc())
+    )
+    return result.scalars().all()
+
+
 @router.patch("/{task_id}", response_model=TaskResponse)
 async def update_task(
     task_id: int,
@@ -158,7 +193,7 @@ async def update_task(
     query = select(Task).options(
         selectinload(Task.owner),
         selectinload(Task.assignee)
-    ).where(Task.id == task_id)
+).where(Task.id == task_id, or_(Task.owner_id == current_user.id, Task.assignee_id == current_user.id))
     result = await db.execute(query)
     task = result.scalar_one_or_none()
     
@@ -167,7 +202,24 @@ async def update_task(
 
     activities_to_create = []
     update_data = task_in.model_dump(exclude_unset=True)
-    
+
+    if "assignee_id" in update_data and update_data["assignee_id"] is not None:
+        assignee_result = await db.execute(
+            select(User.id).where(User.id == update_data["assignee_id"])
+        )
+        if assignee_result.scalar_one_or_none() is None:
+            raise HTTPException(status_code=404, detail="Assignee not found")
+
+    if "project_id" in update_data and update_data["project_id"] is not None:
+        project_result = await db.execute(
+            select(Project.id).where(
+                Project.id == update_data["project_id"],
+                Project.user_id == current_user.id,
+            )
+        )
+        if project_result.scalar_one_or_none() is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+
     for key, value in update_data.items():
         old_val = getattr(task, key)
         if old_val != value:
@@ -231,7 +283,7 @@ async def delete_task(
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user)
 ):
-    query = select(Task).where(Task.id == task_id)
+    query = select(Task).where(Task.id == task_id, Task.owner_id == current_user.id)
     result = await db.execute(query)
     task = result.scalar_one_or_none()
     
@@ -257,6 +309,15 @@ async def get_comments(
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user)
 ):
+    task_result = await db.execute(
+        select(Task.id).where(
+            Task.id == task_id,
+            or_(Task.owner_id == current_user.id, Task.assignee_id == current_user.id),
+        )
+    )
+    if task_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+
     query = select(TaskComment).options(
         selectinload(TaskComment.user)
     ).where(TaskComment.task_id == task_id).order_by(TaskComment.created_at.asc())
@@ -273,7 +334,7 @@ async def create_comment(
     current_user: User = Depends(deps.get_current_user)
 ):
     # Verify task exists
-    task_query = select(Task).where(Task.id == task_id)
+    task_query = select(Task).where(Task.id == task_id, or_(Task.owner_id == current_user.id, Task.assignee_id == current_user.id))
     task_res = await db.execute(task_query)
     if not task_res.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Task not found")
@@ -301,6 +362,15 @@ async def get_activities(
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user)
 ):
+    task_result = await db.execute(
+        select(Task.id).where(
+            Task.id == task_id,
+            or_(Task.owner_id == current_user.id, Task.assignee_id == current_user.id),
+        )
+    )
+    if task_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+
     query = select(TaskActivity).options(
         selectinload(TaskActivity.user)
     ).where(TaskActivity.task_id == task_id).order_by(TaskActivity.created_at.desc())
@@ -309,10 +379,3 @@ async def get_activities(
     return result.scalars().all()
 
 
-@router.get("/users/list", response_model=List[UserResponse])
-async def get_assignees(
-    db: AsyncSession = Depends(deps.get_db),
-    current_user: User = Depends(deps.get_current_user)
-):
-    result = await db.execute(select(User).order_by(User.username.asc()))
-    return result.scalars().all()

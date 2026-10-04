@@ -1,7 +1,7 @@
 import os
 import json
-import asyncio
-import random
+import hashlib
+import hmac
 from typing import Any, Dict
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException
@@ -14,113 +14,121 @@ from app.api import deps
 from app.models.user import User
 from app.models.github import GithubStat, ProjectGithubRepo, GithubActivity
 from app.models.task import Task
+from app.models.project import Project
 from app.schemas.github import GithubStatusResponse, GithubStatResponse, GithubConnectRequest
 from app.core.redis import redis_client
 from app.core.config import settings
+from app.core.security import encrypt_github_token, decrypt_github_token
+from app.core.websockets import manager
 import re
 from fastapi import Request
 
 router = APIRouter()
 
-# Simple deterministic random for mock fallback
-def get_mock_random(seed: int, index: int, min_val: int, max_val: int) -> int:
-    random.seed(seed + index)
-    return random.randint(min_val, max_val)
+TASK_CLOSE_PATTERN = re.compile(r"(?:fix|fixes|fixed|close|closes|closed|resolve|resolves|resolved)\s+#(\d+)", re.IGNORECASE)
+
+async def _complete_referenced_tasks(db: AsyncSession, project_id: int, text: str) -> list[int]:
+    completed: list[int] = []
+    for task_id_text in TASK_CLOSE_PATTERN.findall(text or ""):
+        task_result = await db.execute(
+            select(Task).where(Task.id == int(task_id_text), Task.project_id == project_id)
+        )
+        task = task_result.scalars().first()
+        if task and task.status != "completed":
+            task.status = "completed"
+            completed.append(task.id)
+    return completed
+
+
+async def _github_get(client: httpx.AsyncClient, url: str, headers: dict) -> httpx.Response:
+    response = await client.get(url, headers=headers, timeout=20.0)
+    if response.status_code == 401:
+        raise ValueError("GitHub credentials are no longer valid")
+    response.raise_for_status()
+    return response
+
 
 async def sync_github_data(user_id: int, access_token: str):
-    """
-    Background task to sync Github data.
-    If real access_token is 'mock_token', generates deterministic mock data.
-    Otherwise, it would call real Github APIs using httpx.
-    """
+    """Synchronize real repository, language, commit and pull-request metrics."""
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
     try:
-        # Simulate network delay for sync
-        await asyncio.sleep(2)
-        
-        commits = 0
-        repos = 0
-        prs = 0
-        top_langs = {}
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            user_resp = await _github_get(client, "https://api.github.com/user", headers)
+            username = user_resp.json().get("login")
+            if not username:
+                raise ValueError("GitHub account has no login")
 
-        if access_token == "mock_token":
-            # Generate deterministic mock data
-            commits = get_mock_random(user_id, 1, 500, 2500)
-            repos = get_mock_random(user_id, 2, 10, 45)
-            prs = get_mock_random(user_id, 3, 20, 150)
-            
-            languages = ["TypeScript", "Python", "Rust", "Go", "HTML"]
-            for i, lang in enumerate(languages):
-                top_langs[lang] = get_mock_random(user_id, 4+i, 5, 40)
-        else:
-            # Real Github API logic
-            async with httpx.AsyncClient() as client:
-                headers = {
-                    "Authorization": f"Bearer {access_token}",
-                    "Accept": "application/vnd.github.v3+json"
+            repos_data = []
+            page = 1
+            while True:
+                response = await _github_get(
+                    client,
+                    f"https://api.github.com/user/repos?per_page=100&page={page}&affiliation=owner,collaborator&sort=updated",
+                    headers,
+                )
+                batch = response.json()
+                repos_data.extend(batch)
+                if len(batch) < 100:
+                    break
+                page += 1
+
+            language_bytes: Dict[str, int] = {}
+            for repo in repos_data[:25]:
+                languages_url = repo.get("languages_url")
+                if not languages_url:
+                    continue
+                response = await _github_get(client, languages_url, headers)
+                for language, byte_count in response.json().items():
+                    language_bytes[language] = language_bytes.get(language, 0) + int(byte_count)
+
+            total_bytes = sum(language_bytes.values())
+            top_langs = {}
+            if total_bytes:
+                ranked = sorted(language_bytes.items(), key=lambda item: item[1], reverse=True)[:8]
+                top_langs = {
+                    language: round((byte_count / total_bytes) * 100, 1)
+                    for language, byte_count in ranked
                 }
-                
-                # Fetch repos
-                repos_resp = await client.get("https://api.github.com/user/repos?per_page=100&affiliation=owner,collaborator", headers=headers)
-                if repos_resp.status_code == 200:
-                    repos_data = repos_resp.json()
-                    repos = len(repos_data)
-                    
-                    # Aggregate languages from top 10 recently updated repos
-                    sorted_repos = sorted(repos_data, key=lambda x: x.get('updated_at', ''), reverse=True)[:10]
-                    lang_freq = {}
-                    for r in sorted_repos:
-                        lang = r.get("language")
-                        if lang:
-                            lang_freq[lang] = lang_freq.get(lang, 0) + 1
-                            
-                    # Calculate percentage (approximate)
-                    total_lang_repos = sum(lang_freq.values())
-                    if total_lang_repos > 0:
-                        for l, c in lang_freq.items():
-                            top_langs[l] = int((c / total_lang_repos) * 100)
-                            
-                # For commits and PRs, we can use search API (approximate for user)
-                # Fetching total commits authored by user
-                user_resp = await client.get("https://api.github.com/user", headers=headers)
-                username = user_resp.json().get("login", "")
-                
-                if username:
-                    # NOTE: search/commits is sometimes preview or requires specific headers.
-                    # As an alternative, let's just fetch events for the user to count recent commits and PRs
-                    events_resp = await client.get(f"https://api.github.com/users/{username}/events?per_page=100", headers=headers)
-                    if events_resp.status_code == 200:
-                        events = events_resp.json()
-                        for ev in events:
-                            if ev["type"] == "PushEvent":
-                                commits += len(ev.get("payload", {}).get("commits", []))
-                            elif ev["type"] == "PullRequestEvent":
-                                prs += 1
-            
-        # Update Database
-        async with AsyncSessionLocal() as db:
-            query = select(GithubStat).where(GithubStat.user_id == user_id)
-            result = await db.execute(query)
-            stat = result.scalars().first()
 
+            commit_search = await _github_get(
+                client,
+                f"https://api.github.com/search/commits?q=author:{username}&per_page=1",
+                headers,
+            )
+            pr_search = await _github_get(
+                client,
+                f"https://api.github.com/search/issues?q=author:{username}+type:pr&per_page=1",
+                headers,
+            )
+
+            commits = int(commit_search.json().get("total_count", 0))
+            prs = int(pr_search.json().get("total_count", 0))
+            repos = len(repos_data)
+
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(GithubStat).where(GithubStat.user_id == user_id))
+            stat = result.scalars().first()
             if not stat:
                 stat = GithubStat(user_id=user_id)
                 db.add(stat)
-                
+
             stat.commits = commits
             stat.repositories = repos
             stat.pull_requests = prs
             stat.top_languages = top_langs
             stat.updated_at = datetime.now(timezone.utc)
-
             await db.commit()
-        
-        # Invalidate cache
+
         if redis_client.redis:
             await redis_client.redis.delete(f"user:{user_id}:github:stats")
+    except Exception:
+        # Preserve the last successful snapshot rather than replacing it with fabricated data.
+        raise
 
-    except Exception as e:
-        print(f"Background Sync Error: {e}")
-        # In a real app, log error or mark sync as failed
 
 @router.get("/status", response_model=GithubStatusResponse)
 async def get_status(
@@ -163,7 +171,10 @@ async def connect_github(
             
         username = resp.json().get("login")
 
-    current_user.github_access_token = payload.token
+    try:
+        current_user.github_access_token = encrypt_github_token(payload.token)
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail="GitHub credential encryption is not configured") from exc
     current_user.github_username = username
     await db.commit()
     
@@ -207,7 +218,20 @@ async def trigger_sync(
     if not current_user.github_access_token:
         raise HTTPException(status_code=400, detail="GitHub not connected")
         
-    background_tasks.add_task(sync_github_data, current_user.id, current_user.github_access_token)
+    try:
+        stored_token = current_user.github_access_token
+        if stored_token.startswith("gAAAA"):
+            access_token = decrypt_github_token(stored_token)
+        else:
+            # Legacy installations stored the PAT in plaintext. Re-encrypt it
+            # on first successful use so existing connections migrate safely.
+            access_token = stored_token
+            current_user.github_access_token = encrypt_github_token(access_token)
+            await db.commit()
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail="GitHub credential is unavailable; reconnect GitHub") from exc
+
+    background_tasks.add_task(sync_github_data, current_user.id, access_token)
     return {"status": "sync_started"}
 
 @router.get("/stats", response_model=GithubStatResponse)
@@ -250,65 +274,156 @@ async def get_stats(
 
 @router.post("/webhook")
 async def github_webhook(request: Request, db: AsyncSession = Depends(deps.get_db)):
-    """
-    Receive GitHub webhook payloads.
-    Parses pushes to extract commits, creates GithubActivity, and auto-updates task status.
-    """
-    event = request.headers.get("x-github-event")
-    
-    if event != "push":
-        # We only care about push events right now
-        return {"status": "ignored", "reason": f"unsupported event type: {event}"}
-        
-    payload = await request.json()
-    repo_full_name = payload.get("repository", {}).get("full_name")
-    commits = payload.get("commits", [])
-    
-    if not repo_full_name or not commits:
-        return {"status": "ignored", "reason": "missing repo or commits"}
-        
-    # Find all projects that have this repo linked
-    query = select(ProjectGithubRepo).where(ProjectGithubRepo.repo_full_name == repo_full_name)
-    result = await db.execute(query)
-    linked_repos = result.scalars().all()
-    
-    if not linked_repos:
-        return {"status": "ignored", "reason": "repo not linked to any project"}
-        
-    task_regex = re.compile(r"Fixes #(\d+)", re.IGNORECASE)
-    
-    for linked_repo in linked_repos:
-        project_id = linked_repo.project_id
-        
-        for commit in commits:
-            # Create GithubActivity
-            activity = GithubActivity(
-                project_id=project_id,
-                activity_type="commit",
-                ref_id=commit.get("id", "")[:7],
-                title=commit.get("message", "No message").split("\n")[0],
-                author=commit.get("author", {}).get("name", "Unknown"),
-                url=commit.get("url", ""),
-                timestamp=datetime.fromisoformat(commit.get("timestamp", datetime.now(timezone.utc).isoformat()).replace("Z", "+00:00"))
+    """Receive authenticated GitHub push and pull-request events."""
+    if not settings.GITHUB_WEBHOOK_SECRET:
+        raise HTTPException(status_code=503, detail="GitHub webhook is not configured")
+
+    body = await request.body()
+    signature = request.headers.get("x-hub-signature-256", "")
+    expected = "sha256=" + hmac.new(
+        settings.GITHUB_WEBHOOK_SECRET.encode("utf-8"),
+        body,
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(signature, expected):
+        raise HTTPException(status_code=401, detail="Invalid webhook signature")
+
+    delivery_id = request.headers.get("x-github-delivery", "")
+    if not delivery_id:
+        raise HTTPException(status_code=400, detail="Missing GitHub delivery ID")
+
+    delivery_key = f"github:webhook:delivery:{delivery_id}"
+    if redis_client.redis:
+        is_new = await redis_client.redis.set(delivery_key, "processing", ex=86400, nx=True)
+        if not is_new:
+            return {"status": "ignored", "reason": "duplicate delivery"}
+
+    try:
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail="Malformed webhook payload") from exc
+
+        event = request.headers.get("x-github-event")
+        if event not in {"push", "pull_request"}:
+            return {"status": "ignored", "reason": f"unsupported event type: {event}"}
+
+        repo_full_name = payload.get("repository", {}).get("full_name")
+        if not repo_full_name:
+            return {"status": "ignored", "reason": "missing repository"}
+
+        result = await db.execute(
+            select(ProjectGithubRepo).where(ProjectGithubRepo.repo_full_name == repo_full_name)
+        )
+        linked_repos = result.scalars().all()
+        if not linked_repos:
+            return {"status": "ignored", "reason": "repo not linked to any project"}
+
+        touched_tasks: set[int] = set()
+
+        for linked_repo in linked_repos:
+            project_id = linked_repo.project_id
+
+            if event == "push":
+                commits = payload.get("commits", [])
+                for commit in commits:
+                    commit_id = commit.get("id", "")
+                    if not commit_id:
+                        continue
+
+                    existing = await db.execute(
+                        select(GithubActivity.id).where(
+                            GithubActivity.project_id == project_id,
+                            GithubActivity.activity_type == "commit",
+                            GithubActivity.ref_id == commit_id,
+                        )
+                    )
+                    if existing.scalar_one_or_none() is None:
+                        db.add(GithubActivity(
+                            project_id=project_id,
+                            activity_type="commit",
+                            ref_id=commit_id,
+                            title=commit.get("message", "No message").split("\n")[0],
+                            author=commit.get("author", {}).get("name", "Unknown"),
+                            url=commit.get("url", ""),
+                            timestamp=datetime.fromisoformat(
+                                commit.get("timestamp", datetime.now(timezone.utc).isoformat()).replace("Z", "+00:00")
+                            ),
+                        ))
+
+                    touched_tasks.update(
+                        await _complete_referenced_tasks(
+                            db, project_id, commit.get("message", "")
+                        )
+                    )
+
+            if event == "pull_request":
+                action = payload.get("action", "")
+                pull_request = payload.get("pull_request", {})
+                number = pull_request.get("number") or payload.get("number")
+                if not number:
+                    continue
+
+                ref_id = f"pr:{number}"
+                existing_result = await db.execute(
+                    select(GithubActivity).where(
+                        GithubActivity.project_id == project_id,
+                        GithubActivity.activity_type == "pull_request",
+                        GithubActivity.ref_id == ref_id,
+                    )
+                )
+                activity = existing_result.scalars().first()
+                title = pull_request.get("title", f"Pull request #{number}")
+                state_label = "merged" if pull_request.get("merged") else action
+
+                if activity:
+                    activity.title = f"{title} [{state_label}]"
+                    activity.author = pull_request.get("user", {}).get("login", "Unknown")
+                    activity.url = pull_request.get("html_url", "")
+                    activity.timestamp = datetime.now(timezone.utc)
+                else:
+                    db.add(GithubActivity(
+                        project_id=project_id,
+                        activity_type="pull_request",
+                        ref_id=ref_id,
+                        title=f"{title} [{state_label}]",
+                        author=pull_request.get("user", {}).get("login", "Unknown"),
+                        url=pull_request.get("html_url", ""),
+                        timestamp=datetime.now(timezone.utc),
+                    ))
+
+                if action == "closed" and pull_request.get("merged"):
+                    reference_text = "\n".join([
+                        pull_request.get("title") or "",
+                        pull_request.get("body") or "",
+                    ])
+                    touched_tasks.update(
+                        await _complete_referenced_tasks(db, project_id, reference_text)
+                    )
+
+        await db.commit()
+
+        for task_id in touched_tasks:
+            task_result = await db.execute(
+                select(Task.owner_id, Task.assignee_id, Task.title).where(Task.id == task_id)
             )
-            db.add(activity)
-            
-            # Parse commit message for "Fixes #123"
-            msg = commit.get("message", "")
-            matches = task_regex.findall(msg)
-            
-            for task_id_str in matches:
-                try:
-                    task_id = int(task_id_str)
-                    # Check if task belongs to this project
-                    task_query = select(Task).where(Task.id == task_id, Task.project_id == project_id)
-                    task_result = await db.execute(task_query)
-                    task = task_result.scalars().first()
-                    
-                    if task and task.status != "completed":
-                        task.status = "completed"
-                except ValueError:
-                    pass
-                    
-    await db.commit()
-    return {"status": "success"}
+            task_row = task_result.first()
+            if task_row:
+                owner_id, assignee_id, title = task_row
+                targets = [owner_id]
+                if assignee_id and assignee_id != owner_id:
+                    targets.append(assignee_id)
+                await manager.publish_event(
+                    "TASK_UPDATED",
+                    {"task_id": task_id, "title": title, "status": "completed", "source": "github"},
+                    targets,
+                )
+
+        if redis_client.redis:
+            await redis_client.redis.set(delivery_key, "processed", ex=86400)
+        return {"status": "success", "tasks_completed": sorted(touched_tasks)}
+    except Exception:
+        await db.rollback()
+        if redis_client.redis:
+            await redis_client.redis.delete(delivery_key)
+        raise

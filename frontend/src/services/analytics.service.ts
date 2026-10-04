@@ -4,13 +4,12 @@ export interface AnalyticsOverview {
   total_completed_tasks: number;
   active_projects: number;
   current_streak_days: number;
-  total_coding_hours: number;
+  activity_events_30d: number;
 }
 
 export interface HeatmapDay {
   date: string;
   commits: number;
-  hours: number;
   tasks_completed: number;
 }
 
@@ -20,14 +19,18 @@ export interface StreakData {
 
 export interface WeeklyChartData {
   day: string;
-  hours: number;
+  date: string;
+  github_events: number;
   tasks: number;
+  total_events: number;
 }
 
 export interface ProjectStat {
   name: string;
   progress: number;
   total_tasks: number;
+  overdue_tasks: number;
+  github_activity_30d: number;
 }
 
 export interface ProductivityData {
@@ -53,3 +56,19 @@ class AnalyticsService {
 }
 
 export const analyticsService = new AnalyticsService();
+
+
+export interface AnalyticsInsight {
+  type: "overdue" | "progress" | "deadline" | "stalled";
+  severity: "high" | "medium" | "low";
+  project_id: number;
+  project: string;
+  title: string;
+  message: string;
+  action: string;
+}
+
+export async function getAnalyticsInsights(): Promise<{ insights: AnalyticsInsight[] }> {
+  const response = await axiosInstance.get("/analytics/insights");
+  return response.data;
+}

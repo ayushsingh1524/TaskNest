@@ -1,61 +1,58 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, Depends
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
 from typing import Optional
-from jose import jwt, JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
-from app.core.config import settings
+from app.core.redis import redis_client
 from app.core.websockets import manager
 from app.api.deps import get_db
 from app.models.user import User
 
 router = APIRouter()
+WS_SUBPROTOCOL = "tasknest-v1"
 
-async def get_user_from_token(token: str, db: AsyncSession) -> Optional[User]:
+async def get_user_from_ticket(ticket: str) -> Optional[int]:
+    if not redis_client.redis:
+        return None
     try:
-        payload = jwt.decode(
-            token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
-        )
-        token_data = payload.get("sub")
-        if token_data is None:
-            return None
-            
-        # Parse user_id from subject which is in format: id:username
-        user_id_str = token_data.split(":")[0]
-        user_id = int(user_id_str)
-        return user_id
-    except (JWTError, ValueError, IndexError):
+        user_id = await redis_client.redis.getdel(f"ws:ticket:{ticket}")
+        return int(user_id) if user_id else None
+    except (TypeError, ValueError):
         return None
 
 @router.websocket("/ws")
 async def websocket_endpoint(
     websocket: WebSocket,
-    token: str = Query(...),
     db: AsyncSession = Depends(get_db)
 ):
-    user_id = await get_user_from_token(token, db)
-    
+    protocols = [value.strip() for value in websocket.headers.get("sec-websocket-protocol", "").split(",")]
+    ticket = protocols[1] if len(protocols) == 2 and protocols[0] == WS_SUBPROTOCOL else None
+    user_id = await get_user_from_ticket(ticket) if ticket else None
+
     if not user_id:
-        await websocket.accept()
+        await websocket.accept(subprotocol=WS_SUBPROTOCOL)
+        await websocket.close(code=1008)
+        return
+
+    result = await db.execute(select(User.id).where(User.id == user_id))
+    if result.scalar_one_or_none() is None:
+        await websocket.accept(subprotocol=WS_SUBPROTOCOL)
         await websocket.close(code=1008)
         return
 
     await manager.connect(websocket, user_id)
-    
-    # Broadcast to user themselves that connection was successful
+
     await manager.send_personal_message(
-        {"type": "CONNECTION_ESTABLISHED", "payload": {"status": "connected"}}, 
+        {"type": "CONNECTION_ESTABLISHED", "payload": {"status": "connected"}},
         user_id
     )
 
     try:
         while True:
-            # We don't necessarily expect incoming messages from the client 
-            # (they use REST API for actions), but we keep the connection alive.
             data = await websocket.receive_text()
-            
-            # Simple ping/pong could be handled here
             if data == "ping":
                 await websocket.send_text("pong")
-                
     except WebSocketDisconnect:
+        pass
+    finally:
         manager.disconnect(websocket, user_id)

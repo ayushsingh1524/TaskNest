@@ -95,7 +95,7 @@ export function PixelText({ text, className, forceHover }: PixelTextProps) {
                   animate={{ opacity: 0 }}
                   transition={{
                     duration: 0.3,
-                    delay: Math.random() * 0.2,
+                    delay: ((i * 37) % 8) * 0.025,
                   }}
                 />
               ))}

@@ -1,6 +1,6 @@
-# DevTrack
+# TaskNest
 
-DevTrack is a production-ready monorepo that includes a Next.js 15 frontend and a FastAPI backend, orchestrated with Docker Compose and Nginx.
+TaskNest is a production-ready monorepo that includes a Next.js 15 frontend and a FastAPI backend, orchestrated with Docker Compose and Nginx.
 
 ## Architecture
 - **Frontend**: Next.js 15 (App Router), TypeScript, Tailwind CSS, Shadcn UI

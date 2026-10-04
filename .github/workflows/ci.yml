@@ -1,49 +1,53 @@
-name: DevTrack CI
+name: TaskNest CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main, "fix/**", "feat/**"]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
-  lint-backend:
+  backend:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install flake8
-        if [ -f backend/requirements.txt ]; then pip install -r backend/requirements.txt; fi
-    - name: Lint with flake8
-      run: |
-        cd backend
-        # stop the build if there are Python syntax errors or undefined names
-        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-        # exit-zero treats all errors as warnings
-        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=120 --statistics
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: |
+          python -m pip install --upgrade pip
+          pip install flake8 pytest
+          pip install -r backend/requirements.txt
+      - name: Python syntax and undefined-name checks
+        working-directory: backend
+        run: flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+      - name: Backend security tests
+        working-directory: backend
+        env:
+          SECRET_KEY: tasknest-ci-secret-key
+          GITHUB_TOKEN_ENCRYPTION_KEY: hvwuhhOlIlzpY5pv7Me3mkG2h9dRbjFy_9Z0MDqcAaA=
+        run: PYTHONPATH=. pytest -q
 
-  build-frontend:
+  frontend:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
-    - name: Use Node.js 20
-      uses: actions/setup-node@v3
-      with:
-        node-version: 20
-        cache: 'npm'
-        cache-dependency-path: frontend/package-lock.json
-    - name: Install dependencies
-      run: |
-        cd frontend
-        npm install
-
-    - name: Build Next.js
-      run: |
-        cd frontend
-        npm run build
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
+      - name: Type check
+        working-directory: frontend
+        run: npx tsc --noEmit
+      - name: Build
+        working-directory: frontend
+        run: npm run build

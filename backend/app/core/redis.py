@@ -19,5 +19,14 @@ class RedisClient:
     async def close(self):
         if self.redis:
             await self.redis.aclose()
+            self.redis = None
+
+    async def is_healthy(self) -> bool:
+        if not self.redis:
+            return False
+        try:
+            return bool(await self.redis.ping())
+        except Exception:
+            return False
 
 redis_client = RedisClient()

@@ -6,26 +6,21 @@ import { useEffect, useState } from "react";
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const { mode } = useThemeStore();
-  const [resolvedDefault, setResolvedDefault] = useState<string>("dark");
+  const [autoTheme, setAutoTheme] = useState<string>(() => getAutoTheme());
 
-  // Resolve the 'auto' mode on mount and every 60 seconds
   useEffect(() => {
-    if (mode === "auto") {
-      setResolvedDefault(getAutoTheme());
-      const interval = setInterval(() => {
-        setResolvedDefault(getAutoTheme());
-      }, 60_000);
-      return () => clearInterval(interval);
-    } else {
-      setResolvedDefault(mode);
-    }
+    if (mode !== "auto") return;
+    const interval = setInterval(() => setAutoTheme(getAutoTheme()), 60_000);
+    return () => clearInterval(interval);
   }, [mode]);
+
+  const resolvedTheme = mode === "auto" ? autoTheme : mode;
 
   return (
     <NextThemesProvider
       attribute="class"
-      defaultTheme={resolvedDefault}
-      forcedTheme={mode === "auto" ? resolvedDefault : mode}
+      defaultTheme={resolvedTheme}
+      forcedTheme={resolvedTheme}
       enableSystem={false}
       disableTransitionOnChange={false}
     >
