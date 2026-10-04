@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
+from sqlalchemy.orm import selectinload
 
 from app.api import deps
 from app.models.user import User
@@ -145,7 +146,11 @@ async def get_insights(
     current_user: User = Depends(deps.get_current_user),
 ) -> Any:
     now = datetime.now(timezone.utc)
-    result = await db.execute(select(Project).where(Project.user_id == current_user.id))
+    result = await db.execute(
+        select(Project)
+        .options(selectinload(Project.github_repos))
+        .where(Project.user_id == current_user.id)
+    )
     projects = result.scalars().all()
     insights = []
     for project in projects:
