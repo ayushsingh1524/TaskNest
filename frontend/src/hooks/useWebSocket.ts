@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useAuthStore } from "@/store/authStore";
+import apiClient from "@/lib/axios";
 
 interface WebSocketPayload {
   created_by?: number;
@@ -28,34 +29,45 @@ export function useWebSocket() {
     let cancelled = false;
     const maxReconnectAttempts = 5;
 
-    const connect = () => {
+    const connect = async () => {
       if (cancelled) return;
       if (wsRef.current?.readyState === WebSocket.OPEN || wsRef.current?.readyState === WebSocket.CONNECTING) return;
 
-      const configuredUrl = process.env.NEXT_PUBLIC_WS_URL;
-      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const baseUrl = configuredUrl || `${protocol}//${window.location.host}/api/v1/ws`;
-      const separator = baseUrl.includes("?") ? "&" : "?";
-      const ws = new WebSocket(`${baseUrl}${separator}token=${encodeURIComponent(accessToken)}`);
+      try {
+        const { data } = await apiClient.post<{ ticket: string }>("/auth/ws-ticket");
+        if (cancelled) return;
 
-      ws.onopen = () => {
-        setIsConnected(true);
-        reconnectAttempts.current = 0;
-      };
-      ws.onmessage = (event) => {
-        try { setLastMessage(JSON.parse(event.data)); } catch { /* ignore malformed messages */ }
-      };
-      ws.onclose = () => {
-        setIsConnected(false);
-        wsRef.current = null;
+        const configuredUrl = process.env.NEXT_PUBLIC_WS_URL;
+        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        const baseUrl = configuredUrl || `${protocol}//${window.location.host}/api/v1/ws`;
+        const separator = baseUrl.includes("?") ? "&" : "?";
+        const ws = new WebSocket(`${baseUrl}${separator}ticket=${encodeURIComponent(data.ticket)}`);
+
+        ws.onopen = () => {
+          setIsConnected(true);
+          reconnectAttempts.current = 0;
+        };
+        ws.onmessage = (event) => {
+          try { setLastMessage(JSON.parse(event.data)); } catch { /* ignore malformed messages */ }
+        };
+        ws.onclose = () => {
+          setIsConnected(false);
+          wsRef.current = null;
+          if (!cancelled && reconnectAttempts.current < maxReconnectAttempts) {
+            const timeout = Math.min(1000 * (2 ** reconnectAttempts.current), 15000);
+            reconnectAttempts.current += 1;
+            reconnectTimer.current = setTimeout(connect, timeout);
+          }
+        };
+        ws.onerror = () => ws.close();
+        wsRef.current = ws;
+      } catch {
         if (!cancelled && reconnectAttempts.current < maxReconnectAttempts) {
           const timeout = Math.min(1000 * (2 ** reconnectAttempts.current), 15000);
           reconnectAttempts.current += 1;
           reconnectTimer.current = setTimeout(connect, timeout);
         }
-      };
-      ws.onerror = () => ws.close();
-      wsRef.current = ws;
+      }
     };
 
     connect();
