@@ -2,7 +2,7 @@
 
 import React from "react";
 import { useAnalyticsOverview } from "@/hooks/useAnalytics";
-import { CheckCircle2, Flame, Clock, FolderGit2, Loader2 } from "lucide-react";
+import { Activity, CheckCircle2, Flame, FolderGit2 } from "lucide-react";
 import { motion } from "framer-motion";
 
 export function AnalyticsOverview() {
@@ -42,9 +42,9 @@ export function AnalyticsOverview() {
       glow: "shadow-[0_0_20px_rgba(251,146,60,0.1)]"
     },
     {
-      title: "Coding Hours",
-      value: data.total_coding_hours,
-      icon: <Clock size={24} className="text-blue-400" />,
+      title: "Activity · 30d",
+      value: data.activity_events_30d,
+      icon: <Activity size={24} className="text-blue-400" />,
       bg: "bg-blue-500/10",
       glow: "shadow-[0_0_20px_rgba(59,130,246,0.1)]"
     },
@@ -67,9 +67,6 @@ export function AnalyticsOverview() {
           transition={{ delay: idx * 0.1 }}
           className={`flex flex-col justify-center rounded-2xl border border-white/5 bg-[#121216] p-5 relative overflow-hidden group hover:border-white/10 transition-all ${card.glow}`}
         >
-          <div className="absolute -right-4 -top-4 opacity-5 group-hover:opacity-10 transition-opacity">
-            {React.cloneElement(card.icon as React.ReactElement, { size: 120 } as any)}
-          </div>
           
           <div className={`mb-3 inline-flex h-10 w-10 items-center justify-center rounded-xl ${card.bg}`}>
             {card.icon}
