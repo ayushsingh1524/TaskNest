@@ -1,7 +1,8 @@
 import json
-import random
-from typing import Any, Dict
+from collections import Counter
+from typing import Any
 from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -10,74 +11,106 @@ from app.api import deps
 from app.models.user import User
 from app.models.task import Task
 from app.models.project import Project
+from app.models.github import GithubActivity
 from app.core.redis import redis_client
 
 router = APIRouter()
 
-def get_deterministic_random(seed: int, index: int, max_val: int) -> int:
-    """Simple deterministic random number generator for realistic mock data."""
-    random.seed(seed + index)
-    return random.randint(0, max_val)
+
+async def _owned_project_ids(db: AsyncSession, user_id: int) -> list[int]:
+    result = await db.execute(select(Project.id).where(Project.user_id == user_id))
+    return list(result.scalars().all())
+
+
+async def _activity_dates(
+    db: AsyncSession,
+    user_id: int,
+    start_at: datetime,
+) -> tuple[list[datetime], list[datetime]]:
+    task_result = await db.execute(
+        select(Task.updated_at).where(
+            Task.owner_id == user_id,
+            Task.status == "completed",
+            Task.updated_at >= start_at,
+        )
+    )
+    task_times = [value for value in task_result.scalars().all() if value]
+
+    project_ids = await _owned_project_ids(db, user_id)
+    github_times: list[datetime] = []
+    if project_ids:
+        github_result = await db.execute(
+            select(GithubActivity.timestamp).where(
+                GithubActivity.project_id.in_(project_ids),
+                GithubActivity.timestamp >= start_at,
+            )
+        )
+        github_times = [value for value in github_result.scalars().all() if value]
+
+    return task_times, github_times
+
+
+def _current_streak(activity_days: set) -> int:
+    today = datetime.now(timezone.utc).date()
+    streak = 0
+    cursor = today
+    while cursor in activity_days:
+        streak += 1
+        cursor -= timedelta(days=1)
+    return streak
+
 
 @router.get("/overview")
 async def get_overview(
     db: AsyncSession = Depends(deps.get_db),
-    current_user: User = Depends(deps.get_current_user)
+    current_user: User = Depends(deps.get_current_user),
 ) -> Any:
-    """
-    Get high-level analytics overview.
-    Blends real database metrics with deterministic aesthetic mocks.
-    """
+    """Return real high-level productivity metrics."""
     cache_key = f"user:{current_user.id}:analytics:overview"
-    
     if redis_client.redis:
         cached_data = await redis_client.redis.get(cache_key)
         if cached_data:
             return json.loads(cached_data)
 
-    # Real Metrics
-    query_completed_tasks = select(func.count(Task.id)).where(
-        Task.owner_id == current_user.id, 
-        Task.status == "completed"
+    completed_result = await db.execute(
+        select(func.count(Task.id)).where(
+            Task.owner_id == current_user.id,
+            Task.status == "completed",
+        )
     )
-    completed_tasks_res = await db.execute(query_completed_tasks)
-    total_completed = completed_tasks_res.scalar() or 0
+    total_completed = completed_result.scalar() or 0
 
-    query_active_projects = select(func.count(Project.id)).where(
-        Project.user_id == current_user.id,
-        Project.status == "active"
+    projects_result = await db.execute(
+        select(func.count(Project.id)).where(
+            Project.user_id == current_user.id,
+            Project.status == "active",
+        )
     )
-    active_projects_res = await db.execute(query_active_projects)
-    active_projects = active_projects_res.scalar() or 0
+    active_projects = projects_result.scalar() or 0
 
-    # Deterministic Aesthetics
-    streak = get_deterministic_random(current_user.id, 999, 45)
-    coding_hours = get_deterministic_random(current_user.id, 888, 120) + (total_completed * 1.5)
+    start_at = datetime.now(timezone.utc) - timedelta(days=29)
+    task_times, github_times = await _activity_dates(db, current_user.id, start_at)
+    activity_days = {value.date() for value in [*task_times, *github_times]}
 
     data = {
         "total_completed_tasks": total_completed,
         "active_projects": active_projects,
-        "current_streak_days": streak,
-        "total_coding_hours": int(coding_hours),
+        "current_streak_days": _current_streak(activity_days),
+        "activity_events_30d": len(task_times) + len(github_times),
     }
 
     if redis_client.redis:
-        await redis_client.redis.setex(cache_key, 1800, json.dumps(data)) # 30 min cache
-
+        await redis_client.redis.setex(cache_key, 300, json.dumps(data))
     return data
 
 
 @router.get("/streaks")
 async def get_streaks(
     db: AsyncSession = Depends(deps.get_db),
-    current_user: User = Depends(deps.get_current_user)
+    current_user: User = Depends(deps.get_current_user),
 ) -> Any:
-    """
-    Returns daily intensity data for the past 90 days for the Activity Heatmap.
-    Fetches real completed tasks and GitHub commits.
-    """
+    """Return 90 days of real task-completion and GitHub activity."""
     cache_key = f"user:{current_user.id}:analytics:streaks"
-    
     if redis_client.redis:
         cached_data = await redis_client.redis.get(cache_key)
         if cached_data:
@@ -85,111 +118,104 @@ async def get_streaks(
 
     today = datetime.now(timezone.utc).date()
     start_date = today - timedelta(days=89)
-    
-    heatmap_data = []
-    
-    # 1. Fetch completed tasks for the last 90 days
-    tasks_query = select(Task.updated_at).where(
-        Task.owner_id == current_user.id,
-        Task.status == "completed",
-        Task.updated_at >= datetime.combine(start_date, datetime.min.time()).replace(tzinfo=timezone.utc)
-    )
-    tasks_res = await db.execute(tasks_query)
-    completed_task_dates = [t.date() for t in tasks_res.scalars().all() if t]
-    
-    # 2. Fetch Github activities for the last 90 days
-    # (assuming GithubActivity is linked via project_id which is linked to user, 
-    # but for simplicity, since GithubStat has no direct activity per user yet except via project,
-    # wait... GithubActivity has project_id. Let's find projects owned by user)
-    projects_query = select(Project.id).where(Project.user_id == current_user.id)
-    projects_res = await db.execute(projects_query)
-    project_ids = projects_res.scalars().all()
-    
-    github_dates = []
-    if project_ids:
-        from app.models.github import GithubActivity
-        github_query = select(GithubActivity.timestamp).where(
-            GithubActivity.project_id.in_(project_ids),
-            GithubActivity.timestamp >= datetime.combine(start_date, datetime.min.time()).replace(tzinfo=timezone.utc)
-        )
-        github_res = await db.execute(github_query)
-        github_dates = [g.date() for g in github_res.scalars().all() if g]
+    start_at = datetime.combine(start_date, datetime.min.time()).replace(tzinfo=timezone.utc)
 
-    # Map counts per day
+    task_times, github_times = await _activity_dates(db, current_user.id, start_at)
+    task_counts = Counter(value.date() for value in task_times)
+    github_counts = Counter(value.date() for value in github_times)
+
+    heatmap_data = []
     for i in range(90):
         target_date = start_date + timedelta(days=i)
-        
-        tasks_completed = sum(1 for d in completed_task_dates if d == target_date)
-        commits = sum(1 for d in github_dates if d == target_date)
-        
         heatmap_data.append({
-            "date": target_date.strftime("%Y-%m-%d"),
-            "commits": commits,
-            "tasks_completed": tasks_completed,
-            "hours": round(commits * 0.5 + tasks_completed * 1.0, 1)
+            "date": target_date.isoformat(),
+            "commits": github_counts[target_date],
+            "tasks_completed": task_counts[target_date],
         })
 
     data = {"heatmap": heatmap_data}
-
     if redis_client.redis:
-        await redis_client.redis.setex(cache_key, 1800, json.dumps(data))
-
+        await redis_client.redis.setex(cache_key, 300, json.dumps(data))
     return data
 
 
 @router.get("/productivity")
 async def get_productivity(
     db: AsyncSession = Depends(deps.get_db),
-    current_user: User = Depends(deps.get_current_user)
+    current_user: User = Depends(deps.get_current_user),
 ) -> Any:
-    """
-    Returns week-over-week distribution charts and project progress analytics.
-    """
+    """Return real seven-day development activity and project progress."""
     cache_key = f"user:{current_user.id}:analytics:productivity"
-    
     if redis_client.redis:
         cached_data = await redis_client.redis.get(cache_key)
         if cached_data:
             return json.loads(cached_data)
 
-    # 1. Weekly Distribution (Mock Deterministic)
-    days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    today = datetime.now(timezone.utc).date()
+    week_start = today - timedelta(days=6)
+    start_at = datetime.combine(week_start, datetime.min.time()).replace(tzinfo=timezone.utc)
+
+    task_times, github_times = await _activity_dates(db, current_user.id, start_at)
+    task_counts = Counter(value.date() for value in task_times)
+    github_counts = Counter(value.date() for value in github_times)
+
     weekly_chart = []
-    for i, day in enumerate(days):
+    for i in range(7):
+        target_date = week_start + timedelta(days=i)
+        tasks = task_counts[target_date]
+        github_events = github_counts[target_date]
         weekly_chart.append({
-            "day": day,
-            "hours": get_deterministic_random(current_user.id, i + 200, 8),
-            "tasks": get_deterministic_random(current_user.id, i + 300, 5)
+            "day": target_date.strftime("%a"),
+            "date": target_date.isoformat(),
+            "github_events": github_events,
+            "tasks": tasks,
+            "total_events": github_events + tasks,
         })
 
-    # 2. Real Project Progress
-    query = select(Project).where(Project.user_id == current_user.id).limit(5)
-    projects_res = await db.execute(query)
-    projects = projects_res.scalars().all()
+    projects_result = await db.execute(
+        select(Project)
+        .where(Project.user_id == current_user.id)
+        .order_by(Project.updated_at.desc())
+        .limit(5)
+    )
+    projects = projects_result.scalars().all()
+
+    project_ids = [project.id for project in projects]
+    github_30d_counts: Counter = Counter()
+    if project_ids:
+        activity_result = await db.execute(
+            select(GithubActivity.project_id).where(
+                GithubActivity.project_id.in_(project_ids),
+                GithubActivity.timestamp >= datetime.now(timezone.utc) - timedelta(days=30),
+            )
+        )
+        github_30d_counts = Counter(activity_result.scalars().all())
 
     project_stats = []
-    for p in projects:
-        # Get tasks for this project
-        t_query = select(Task.status).where(Task.project_id == p.id)
-        t_res = await db.execute(t_query)
-        task_statuses = t_res.scalars().all()
-        
-        total = len(task_statuses)
-        completed = sum(1 for s in task_statuses if s == "completed")
-        progress = int((completed / total) * 100) if total > 0 else 0
-        
+    now = datetime.now(timezone.utc)
+    for project in projects:
+        task_result = await db.execute(
+            select(Task.status, Task.due_date).where(Task.project_id == project.id)
+        )
+        rows = task_result.all()
+        total = len(rows)
+        completed = sum(1 for status, _ in rows if status == "completed")
+        overdue = sum(
+            1
+            for status, due_date in rows
+            if due_date and due_date < now and status != "completed"
+        )
+        progress = int((completed / total) * 100) if total else 0
+
         project_stats.append({
-            "name": p.title,
+            "name": project.title,
             "progress": progress,
-            "total_tasks": total
+            "total_tasks": total,
+            "overdue_tasks": overdue,
+            "github_activity_30d": github_30d_counts[project.id],
         })
 
-    data = {
-        "weekly_chart": weekly_chart,
-        "project_stats": project_stats
-    }
-
+    data = {"weekly_chart": weekly_chart, "project_stats": project_stats}
     if redis_client.redis:
-        await redis_client.redis.setex(cache_key, 1800, json.dumps(data))
-
+        await redis_client.redis.setex(cache_key, 300, json.dumps(data))
     return data
