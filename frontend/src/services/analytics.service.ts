@@ -56,3 +56,19 @@ class AnalyticsService {
 }
 
 export const analyticsService = new AnalyticsService();
+
+
+export interface AnalyticsInsight {
+  type: "overdue" | "progress" | "deadline" | "stalled";
+  severity: "high" | "medium" | "low";
+  project_id: number;
+  project: string;
+  title: string;
+  message: string;
+  action: string;
+}
+
+export async function getAnalyticsInsights(): Promise<{ insights: AnalyticsInsight[] }> {
+  const response = await axiosInstance.get("/analytics/insights");
+  return response.data;
+}
