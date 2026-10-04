@@ -12,6 +12,7 @@ from app.core.config import settings
 from app.models.user import User
 from app.schemas.user import UserResponse
 from app.models.task import Task, TaskComment, TaskActivity
+from app.models.project import Project
 from app.schemas.task import (
     TaskCreate, TaskUpdate, TaskResponse,
     CommentCreate, CommentResponse, ActivityResponse
@@ -97,6 +98,23 @@ async def create_task(
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user)
 ):
+    if task_in.project_id is not None:
+        project_result = await db.execute(
+            select(Project.id).where(
+                Project.id == task_in.project_id,
+                Project.user_id == current_user.id,
+            )
+        )
+        if project_result.scalar_one_or_none() is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+    if task_in.assignee_id is not None:
+        assignee_result = await db.execute(
+            select(User.id).where(User.id == task_in.assignee_id)
+        )
+        if assignee_result.scalar_one_or_none() is None:
+            raise HTTPException(status_code=404, detail="Assignee not found")
+
     task = Task(
         title=task_in.title,
         description=task_in.description,
