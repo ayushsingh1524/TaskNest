@@ -18,11 +18,17 @@ jobs:
           cache-dependency-path: backend/requirements.txt
       - run: |
           python -m pip install --upgrade pip
-          pip install flake8
+          pip install flake8 pytest
           pip install -r backend/requirements.txt
       - name: Python syntax and undefined-name checks
         working-directory: backend
         run: flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+      - name: Backend security tests
+        working-directory: backend
+        env:
+          SECRET_KEY: tasknest-ci-secret-key
+          GITHUB_TOKEN_ENCRYPTION_KEY: ZmFrZS1mb3ItY2ktdXNlLW9ubHktMTIzNDU2Nzg5MDEyMzQ1Njc4OTA=
+        run: pytest -q
 
   frontend:
     runs-on: ubuntu-latest
