@@ -219,9 +219,17 @@ async def trigger_sync(
         raise HTTPException(status_code=400, detail="GitHub not connected")
         
     try:
-        access_token = decrypt_github_token(current_user.github_access_token)
+        stored_token = current_user.github_access_token
+        if stored_token.startswith("gAAAA"):
+            access_token = decrypt_github_token(stored_token)
+        else:
+            # Legacy installations stored the PAT in plaintext. Re-encrypt it
+            # on first successful use so existing connections migrate safely.
+            access_token = stored_token
+            current_user.github_access_token = encrypt_github_token(access_token)
+            await db.commit()
     except (RuntimeError, ValueError) as exc:
-        raise HTTPException(status_code=503, detail="GitHub credential is unavailable") from exc
+        raise HTTPException(status_code=503, detail="GitHub credential is unavailable; reconnect GitHub") from exc
 
     background_tasks.add_task(sync_github_data, current_user.id, access_token)
     return {"status": "sync_started"}
