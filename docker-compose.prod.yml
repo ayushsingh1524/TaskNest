@@ -7,33 +7,33 @@ services:
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      POSTGRES_DB: ${POSTGRES_DB:-devtrack}
+      POSTGRES_DB: ${POSTGRES_DB:-tasknest}
     volumes:
-      - devtrack_postgres_data:/var/lib/postgresql/data
+      - tasknest_postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-devtrack}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-tasknest}"]
       interval: 5s
       timeout: 5s
       retries: 5
-    networks: [devtrack_net]
+    networks: [tasknest_net]
 
   redis:
     image: redis:7-alpine
     restart: always
     volumes:
-      - devtrack_redis_data:/data
+      - tasknest_redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
-    networks: [devtrack_net]
+    networks: [tasknest_net]
 
   backend:
     image: ghcr.io/ayushsingh1524/tasknest-backend:latest
     restart: always
     environment:
-      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-devtrack}
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-tasknest}
       - REDIS_URL=redis://redis:6379/0
       - SECRET_KEY=${SECRET_KEY:?SECRET_KEY is required}
       - ALGORITHM=HS256
@@ -61,14 +61,14 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-    networks: [devtrack_net]
+    networks: [tasknest_net]
 
   celery:
     image: ghcr.io/ayushsingh1524/tasknest-backend:latest
     restart: always
     command: celery -A app.workers.celery_app worker --loglevel=info
     environment:
-      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-devtrack}
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-tasknest}
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/1
       - CELERY_RESULT_BACKEND=redis://redis:6379/2
@@ -78,7 +78,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    networks: [devtrack_net]
+    networks: [tasknest_net]
 
   frontend:
     image: ghcr.io/ayushsingh1524/tasknest-frontend:latest
@@ -86,7 +86,7 @@ services:
     environment:
       - BACKEND_URL=http://backend:8000
       - NEXT_PUBLIC_WS_URL=wss://${DOMAIN:-localhost}/api/v1/ws
-    networks: [devtrack_net]
+    networks: [tasknest_net]
 
   nginx:
     image: nginx:alpine
@@ -98,12 +98,12 @@ services:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/certs:/etc/nginx/certs:ro
     depends_on: [backend, frontend]
-    networks: [devtrack_net]
+    networks: [tasknest_net]
 
 volumes:
-  devtrack_postgres_data:
-  devtrack_redis_data:
+  tasknest_postgres_data:
+  tasknest_redis_data:
 
 networks:
-  devtrack_net:
+  tasknest_net:
     driver: bridge
