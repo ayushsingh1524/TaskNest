@@ -27,7 +27,7 @@ jobs:
         working-directory: backend
         env:
           SECRET_KEY: tasknest-ci-secret-key
-          GITHUB_TOKEN_ENCRYPTION_KEY: ZmFrZS1mb3ItY2ktdXNlLW9ubHktMTIzNDU2Nzg5MDEyMzQ1Njc4OTA=
+          GITHUB_TOKEN_ENCRYPTION_KEY: hvwuhhOlIlzpY5pv7Me3mkG2h9dRbjFy_9Z0MDqcAaA=
         run: pytest -q
 
   frontend:
