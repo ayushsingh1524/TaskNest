@@ -30,6 +30,14 @@ const CustomTooltip = ({ active, payload }: any) => {
             <span className="w-2 h-2 rounded-full bg-white/20" />
             {data.total_tasks} Total Tasks
           </p>
+          <p className="text-sm font-medium text-red-300 flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-red-400" />
+            {data.overdue_tasks} Overdue
+          </p>
+          <p className="text-sm font-medium text-blue-300 flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-blue-400" />
+            {data.github_activity_30d} GitHub Events · 30d
+          </p>
         </div>
       </div>
     );
@@ -67,7 +75,7 @@ export function ProjectProgressChart() {
       <div className="mb-6 flex items-center justify-between">
         <div>
           <h2 className="text-lg font-bold text-white/90">Project Health</h2>
-          <p className="text-sm text-white/40 mt-1">Completion progress across active projects</p>
+          <p className="text-sm text-white/40 mt-1">Real completion, overdue work, and recent development activity</p>
         </div>
         <div className="h-10 w-10 rounded-xl bg-purple-500/10 flex items-center justify-center">
           <FolderGit2 className="text-purple-400" size={20} />
