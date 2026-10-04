@@ -36,6 +36,13 @@ class ProjectAnalytics(BaseModel):
     completion_percentage: int
     overdue_tasks: int
     pending_tasks: int
+    github_commits: int = 0
+    github_pull_requests: int = 0
+    github_activity_7d: int = 0
+    github_activity_30d: int = 0
+    last_github_activity_at: Optional[datetime] = None
+    health_score: int = 100
+    health_status: str = "healthy"
 
 class ProjectDetailResponse(ProjectResponse):
     tasks: List[TaskResponse] = []
