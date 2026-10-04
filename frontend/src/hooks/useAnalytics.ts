@@ -24,3 +24,12 @@ export const useAnalyticsProductivity = () => {
     staleTime: 5 * 60 * 1000,
   });
 };
+
+
+export function useAnalyticsInsights() {
+  return useQuery({
+    queryKey: ["analytics", "insights"],
+    queryFn: analyticsService.getAnalyticsInsights,
+    staleTime: 5 * 60 * 1000,
+  });
+}
