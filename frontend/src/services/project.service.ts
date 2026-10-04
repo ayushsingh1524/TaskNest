@@ -25,6 +25,13 @@ export interface ProjectAnalytics {
   completion_percentage: number;
   overdue_tasks: number;
   pending_tasks: number;
+  github_commits: number;
+  github_pull_requests: number;
+  github_activity_7d: number;
+  github_activity_30d: number;
+  last_github_activity_at: string | null;
+  health_score: number;
+  health_status: "healthy" | "attention" | "at_risk";
 }
 
 export interface ProjectGithubRepo {
@@ -99,6 +106,10 @@ class ProjectService {
       repo_full_name: repoFullName,
     });
     return response.data;
+  }
+
+  async unlinkGithubRepo(projectId: number, repoId: number): Promise<void> {
+    await axiosInstance.delete(`/projects/${projectId}/github_repos/${repoId}`);
   }
 }
 
