@@ -139,6 +139,43 @@ async def get_streaks(
     return data
 
 
+@router.get("/insights")
+async def get_insights(
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_user),
+) -> Any:
+    now = datetime.now(timezone.utc)
+    result = await db.execute(select(Project).where(Project.user_id == current_user.id))
+    projects = result.scalars().all()
+    insights = []
+    for project in projects:
+        result = await db.execute(select(Task.status, Task.due_date).where(Task.project_id == project.id))
+        rows = result.all()
+        total = len(rows)
+        completed = sum(1 for status, _ in rows if status == "completed")
+        overdue = sum(1 for status, due in rows if due and due < now and status != "completed")
+        progress = int(completed / total * 100) if total else 0
+        if overdue:
+            insights.append({"type":"overdue","severity":"high" if overdue >= 3 else "medium","project_id":project.id,"project":project.title,"title":"Overdue work needs attention","message":f"{overdue} overdue task(s).","action":"Review overdue tasks and reset priorities."})
+        if total >= 5 and progress < 30:
+            insights.append({"type":"progress","severity":"medium","project_id":project.id,"project":project.title,"title":"Project progress is low","message":f"{progress}% of {total} tasks completed.","action":"Break the next milestone into smaller tasks."})
+        if project.deadline and project.deadline > now:
+            days = (project.deadline - now).days
+            if days <= 7 and progress < 70:
+                insights.append({"type":"deadline","severity":"high","project_id":project.id,"project":project.title,"title":"Deadline risk","message":f"{days} day(s) remain and progress is {progress}%.","action":"Prioritize critical tasks and defer non-essential work."})
+        if project.github_repos:
+            result = await db.execute(select(GithubActivity.timestamp).where(GithubActivity.project_id == project.id).order_by(GithubActivity.timestamp.desc()).limit(1))
+            last = result.scalar_one_or_none()
+            if last and (now - last).days >= 7:
+                insights.append({"type":"stalled","severity":"high","project_id":project.id,"project":project.title,"title":"Development activity has slowed","message":f"No linked GitHub activity for {(now-last).days} days.","action":"Check blockers, open PRs, and the next actionable task."})
+    order={"high":0,"medium":1,"low":2}
+    insights.sort(key=lambda x: order[x["severity"]])
+    data={"insights":insights[:10]}
+    if redis_client.redis:
+        await redis_client.redis.setex(f"user:{current_user.id}:analytics:insights",300,json.dumps(data))
+    return data
+
+
 @router.get("/productivity")
 async def get_productivity(
     db: AsyncSession = Depends(deps.get_db),
