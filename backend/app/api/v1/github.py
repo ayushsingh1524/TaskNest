@@ -14,14 +14,31 @@ from app.api import deps
 from app.models.user import User
 from app.models.github import GithubStat, ProjectGithubRepo, GithubActivity
 from app.models.task import Task
+from app.models.project import Project
 from app.schemas.github import GithubStatusResponse, GithubStatResponse, GithubConnectRequest
 from app.core.redis import redis_client
 from app.core.config import settings
 from app.core.security import encrypt_github_token, decrypt_github_token
+from app.core.websockets import manager
 import re
 from fastapi import Request
 
 router = APIRouter()
+
+TASK_CLOSE_PATTERN = re.compile(r"(?:fix|fixes|fixed|close|closes|closed|resolve|resolves|resolved)\\s+#(\\d+)", re.IGNORECASE)
+
+async def _complete_referenced_tasks(db: AsyncSession, project_id: int, text: str) -> list[int]:
+    completed: list[int] = []
+    for task_id_text in TASK_CLOSE_PATTERN.findall(text or ""):
+        task_result = await db.execute(
+            select(Task).where(Task.id == int(task_id_text), Task.project_id == project_id)
+        )
+        task = task_result.scalars().first()
+        if task and task.status != "completed":
+            task.status = "completed"
+            completed.append(task.id)
+    return completed
+
 
 async def _github_get(client: httpx.AsyncClient, url: str, headers: dict) -> httpx.Response:
     response = await client.get(url, headers=headers, timeout=20.0)
@@ -249,7 +266,7 @@ async def get_stats(
 
 @router.post("/webhook")
 async def github_webhook(request: Request, db: AsyncSession = Depends(deps.get_db)):
-    """Receive authenticated, idempotent GitHub push webhook payloads."""
+    """Receive authenticated GitHub push and pull-request events."""
     if not settings.GITHUB_WEBHOOK_SECRET:
         raise HTTPException(status_code=503, detail="GitHub webhook is not configured")
 
@@ -280,13 +297,12 @@ async def github_webhook(request: Request, db: AsyncSession = Depends(deps.get_d
             raise HTTPException(status_code=400, detail="Malformed webhook payload") from exc
 
         event = request.headers.get("x-github-event")
-        if event != "push":
+        if event not in {"push", "pull_request"}:
             return {"status": "ignored", "reason": f"unsupported event type: {event}"}
 
         repo_full_name = payload.get("repository", {}).get("full_name")
-        commits = payload.get("commits", [])
-        if not repo_full_name or not commits:
-            return {"status": "ignored", "reason": "missing repo or commits"}
+        if not repo_full_name:
+            return {"status": "ignored", "reason": "missing repository"}
 
         result = await db.execute(
             select(ProjectGithubRepo).where(ProjectGithubRepo.repo_full_name == repo_full_name)
@@ -295,48 +311,109 @@ async def github_webhook(request: Request, db: AsyncSession = Depends(deps.get_d
         if not linked_repos:
             return {"status": "ignored", "reason": "repo not linked to any project"}
 
-        task_regex = re.compile(r"Fixes #(\\d+)", re.IGNORECASE)
+        touched_tasks: set[int] = set()
+
         for linked_repo in linked_repos:
             project_id = linked_repo.project_id
-            for commit in commits:
-                commit_id = commit.get("id", "")
-                existing = await db.execute(
-                    select(GithubActivity.id).where(
-                        GithubActivity.project_id == project_id,
-                        GithubActivity.activity_type == "commit",
-                        GithubActivity.ref_id == commit_id[:7],
-                    )
-                )
-                if existing.scalar_one_or_none() is not None:
-                    continue
 
-                db.add(GithubActivity(
-                    project_id=project_id,
-                    activity_type="commit",
-                    ref_id=commit_id[:7],
-                    title=commit.get("message", "No message").split("\\n")[0],
-                    author=commit.get("author", {}).get("name", "Unknown"),
-                    url=commit.get("url", ""),
-                    timestamp=datetime.fromisoformat(
-                        commit.get("timestamp", datetime.now(timezone.utc).isoformat()).replace("Z", "+00:00")
-                    ),
-                ))
+            if event == "push":
+                commits = payload.get("commits", [])
+                for commit in commits:
+                    commit_id = commit.get("id", "")
+                    if not commit_id:
+                        continue
 
-                for task_id_str in task_regex.findall(commit.get("message", "")):
-                    task_result = await db.execute(
-                        select(Task).where(
-                            Task.id == int(task_id_str),
-                            Task.project_id == project_id,
+                    existing = await db.execute(
+                        select(GithubActivity.id).where(
+                            GithubActivity.project_id == project_id,
+                            GithubActivity.activity_type == "commit",
+                            GithubActivity.ref_id == commit_id[:7],
                         )
                     )
-                    task = task_result.scalars().first()
-                    if task and task.status != "completed":
-                        task.status = "completed"
+                    if existing.scalar_one_or_none() is None:
+                        db.add(GithubActivity(
+                            project_id=project_id,
+                            activity_type="commit",
+                            ref_id=commit_id[:7],
+                            title=commit.get("message", "No message").split("\n")[0],
+                            author=commit.get("author", {}).get("name", "Unknown"),
+                            url=commit.get("url", ""),
+                            timestamp=datetime.fromisoformat(
+                                commit.get("timestamp", datetime.now(timezone.utc).isoformat()).replace("Z", "+00:00")
+                            ),
+                        ))
+
+                    touched_tasks.update(
+                        await _complete_referenced_tasks(
+                            db, project_id, commit.get("message", "")
+                        )
+                    )
+
+            if event == "pull_request":
+                action = payload.get("action", "")
+                pull_request = payload.get("pull_request", {})
+                number = pull_request.get("number") or payload.get("number")
+                if not number:
+                    continue
+
+                ref_id = f"pr:{number}"
+                existing_result = await db.execute(
+                    select(GithubActivity).where(
+                        GithubActivity.project_id == project_id,
+                        GithubActivity.activity_type == "pull_request",
+                        GithubActivity.ref_id == ref_id,
+                    )
+                )
+                activity = existing_result.scalars().first()
+                title = pull_request.get("title", f"Pull request #{number}")
+                state_label = "merged" if pull_request.get("merged") else action
+
+                if activity:
+                    activity.title = f"{title} [{state_label}]"
+                    activity.author = pull_request.get("user", {}).get("login", "Unknown")
+                    activity.url = pull_request.get("html_url", "")
+                    activity.timestamp = datetime.now(timezone.utc)
+                else:
+                    db.add(GithubActivity(
+                        project_id=project_id,
+                        activity_type="pull_request",
+                        ref_id=ref_id,
+                        title=f"{title} [{state_label}]",
+                        author=pull_request.get("user", {}).get("login", "Unknown"),
+                        url=pull_request.get("html_url", ""),
+                        timestamp=datetime.now(timezone.utc),
+                    ))
+
+                if action == "closed" and pull_request.get("merged"):
+                    reference_text = "\n".join([
+                        pull_request.get("title") or "",
+                        pull_request.get("body") or "",
+                    ])
+                    touched_tasks.update(
+                        await _complete_referenced_tasks(db, project_id, reference_text)
+                    )
 
         await db.commit()
+
+        for task_id in touched_tasks:
+            task_result = await db.execute(
+                select(Task.owner_id, Task.assignee_id, Task.title).where(Task.id == task_id)
+            )
+            task_row = task_result.first()
+            if task_row:
+                owner_id, assignee_id, title = task_row
+                targets = [owner_id]
+                if assignee_id and assignee_id != owner_id:
+                    targets.append(assignee_id)
+                await manager.publish_event(
+                    "TASK_UPDATED",
+                    {"task_id": task_id, "title": title, "status": "completed", "source": "github"},
+                    targets,
+                )
+
         if redis_client.redis:
             await redis_client.redis.set(delivery_key, "processed", ex=86400)
-        return {"status": "success"}
+        return {"status": "success", "tasks_completed": sorted(touched_tasks)}
     except Exception:
         await db.rollback()
         if redis_client.redis:
