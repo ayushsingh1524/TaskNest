@@ -335,14 +335,14 @@ async def github_webhook(request: Request, db: AsyncSession = Depends(deps.get_d
                         select(GithubActivity.id).where(
                             GithubActivity.project_id == project_id,
                             GithubActivity.activity_type == "commit",
-                            GithubActivity.ref_id == commit_id[:7],
+                            GithubActivity.ref_id == commit_id,
                         )
                     )
                     if existing.scalar_one_or_none() is None:
                         db.add(GithubActivity(
                             project_id=project_id,
                             activity_type="commit",
-                            ref_id=commit_id[:7],
+                            ref_id=commit_id,
                             title=commit.get("message", "No message").split("\n")[0],
                             author=commit.get("author", {}).get("name", "Unknown"),
                             url=commit.get("url", ""),
