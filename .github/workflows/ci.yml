@@ -28,7 +28,7 @@ jobs:
         env:
           SECRET_KEY: tasknest-ci-secret-key
           GITHUB_TOKEN_ENCRYPTION_KEY: hvwuhhOlIlzpY5pv7Me3mkG2h9dRbjFy_9Z0MDqcAaA=
-        run: pytest -q
+        run: PYTHONPATH=. pytest -q
 
   frontend:
     runs-on: ubuntu-latest
