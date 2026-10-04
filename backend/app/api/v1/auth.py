@@ -9,6 +9,7 @@ from jose import jwt, JWTError
 from app.api import deps
 from app.core.config import settings
 from app.core import security
+from app.core.redis import redis_client
 from app.models.user import User
 from app.schemas.user import UserCreate, UserResponse, UserLogin, ForgotPassword, ResetPassword
 from app.schemas.token import Token
@@ -58,6 +59,14 @@ async def refresh_token(request: Request, response: Response, db: AsyncSession =
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return {"access_token": security.create_access_token(subject=user.id), "token_type": "bearer"}
+
+@router.post("/ws-ticket")
+async def create_ws_ticket(current_user: User = Depends(deps.get_current_user)) -> Any:
+    if not redis_client.redis:
+        raise HTTPException(status_code=503, detail="Realtime service unavailable")
+    ticket = secrets.token_urlsafe(32)
+    await redis_client.redis.setex(f"ws:ticket:{ticket}", 30, str(current_user.id))
+    return {"ticket": ticket, "expires_in": 30}
 
 @router.post("/logout")
 async def logout(response: Response) -> Any:
