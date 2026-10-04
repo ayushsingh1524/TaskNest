@@ -185,7 +185,14 @@ async def update_task(
 
     activities_to_create = []
     update_data = task_in.model_dump(exclude_unset=True)
-    
+
+    if "assignee_id" in update_data and update_data["assignee_id"] is not None:
+        assignee_result = await db.execute(
+            select(User.id).where(User.id == update_data["assignee_id"])
+        )
+        if assignee_result.scalar_one_or_none() is None:
+            raise HTTPException(status_code=404, detail="Assignee not found")
+
     for key, value in update_data.items():
         old_val = getattr(task, key)
         if old_val != value:
