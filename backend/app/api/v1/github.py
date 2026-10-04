@@ -25,7 +25,7 @@ from fastapi import Request
 
 router = APIRouter()
 
-TASK_CLOSE_PATTERN = re.compile(r"(?:fix|fixes|fixed|close|closes|closed|resolve|resolves|resolved)\\s+#(\\d+)", re.IGNORECASE)
+TASK_CLOSE_PATTERN = re.compile(r"(?:fix|fixes|fixed|close|closes|closed|resolve|resolves|resolved)\s+#(\d+)", re.IGNORECASE)
 
 async def _complete_referenced_tasks(db: AsyncSession, project_id: int, text: str) -> list[int]:
     completed: list[int] = []
