@@ -193,6 +193,16 @@ async def update_task(
         if assignee_result.scalar_one_or_none() is None:
             raise HTTPException(status_code=404, detail="Assignee not found")
 
+    if "project_id" in update_data and update_data["project_id"] is not None:
+        project_result = await db.execute(
+            select(Project.id).where(
+                Project.id == update_data["project_id"],
+                Project.user_id == current_user.id,
+            )
+        )
+        if project_result.scalar_one_or_none() is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+
     for key, value in update_data.items():
         old_val = getattr(task, key)
         if old_val != value:
