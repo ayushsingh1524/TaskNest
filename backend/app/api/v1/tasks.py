@@ -367,5 +367,13 @@ async def get_assignees(
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user)
 ):
-    result = await db.execute(select(User).order_by(User.username.asc()))
+    assigned_user_ids = select(Task.assignee_id).where(
+        Task.owner_id == current_user.id,
+        Task.assignee_id.is_not(None),
+    )
+    result = await db.execute(
+        select(User)
+        .where((User.id == current_user.id) | User.id.in_(assigned_user_ids))
+        .order_by(User.username.asc())
+    )
     return result.scalars().all()
