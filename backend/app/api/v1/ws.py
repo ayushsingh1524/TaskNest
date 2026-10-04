@@ -1,4 +1,4 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, Depends
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -9,6 +9,7 @@ from app.api.deps import get_db
 from app.models.user import User
 
 router = APIRouter()
+WS_SUBPROTOCOL = "tasknest-v1"
 
 async def get_user_from_ticket(ticket: str) -> Optional[int]:
     if not redis_client.redis:
@@ -22,19 +23,20 @@ async def get_user_from_ticket(ticket: str) -> Optional[int]:
 @router.websocket("/ws")
 async def websocket_endpoint(
     websocket: WebSocket,
-    ticket: str = Query(...),
     db: AsyncSession = Depends(get_db)
 ):
-    user_id = await get_user_from_ticket(ticket)
+    protocols = [value.strip() for value in websocket.headers.get("sec-websocket-protocol", "").split(",")]
+    ticket = protocols[1] if len(protocols) == 2 and protocols[0] == WS_SUBPROTOCOL else None
+    user_id = await get_user_from_ticket(ticket) if ticket else None
 
     if not user_id:
-        await websocket.accept()
+        await websocket.accept(subprotocol=WS_SUBPROTOCOL)
         await websocket.close(code=1008)
         return
 
     result = await db.execute(select(User.id).where(User.id == user_id))
     if result.scalar_one_or_none() is None:
-        await websocket.accept()
+        await websocket.accept(subprotocol=WS_SUBPROTOCOL)
         await websocket.close(code=1008)
         return
 
