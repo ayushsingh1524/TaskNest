@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { useProjectDetail, useDeleteProject, useLinkGithubRepo } from "@/hooks/useProjects";
+import { useProjectDetail, useDeleteProject, useLinkGithubRepo, useUnlinkGithubRepo } from "@/hooks/useProjects";
 import { ProjectAnalytics } from "@/components/projects/ProjectAnalytics";
 import { ProjectGithubActivity } from "@/components/projects/ProjectGithubActivity";
 import { Button } from "@/components/ui/button";
@@ -24,6 +24,7 @@ export default function ProjectDetailPage() {
   const deleteProject = useDeleteProject();
   const updateTask = useUpdateTask();
   const linkRepo = useLinkGithubRepo();
+  const unlinkRepo = useUnlinkGithubRepo();
   const { data: projectNotes } = useNotes(undefined, projectId);
 
   const [taskView, setTaskView] = useState<"list" | "kanban">("list");
@@ -129,10 +130,13 @@ export default function ProjectDetailPage() {
 
       {/* GitHub Integration */}
       <div className="mt-8">
-        <ProjectGithubActivity 
-          repos={project.github_repos || []} 
-          activities={project.github_activities || []} 
+        <ProjectGithubActivity
+          repos={project.github_repos || []}
+          activities={project.github_activities || []}
           onAddRepo={(repoFullName) => linkRepo.mutate({ projectId, repoFullName })}
+          onRemoveRepo={(repoId) => unlinkRepo.mutate({ projectId, repoId })}
+          isLinking={linkRepo.isPending}
+          isUnlinking={unlinkRepo.isPending}
         />
       </div>
 
