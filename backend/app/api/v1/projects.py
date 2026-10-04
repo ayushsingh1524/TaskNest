@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from app.api import deps
 from app.models.user import User
@@ -136,17 +136,61 @@ async def get_project(
     if total_tasks > 0:
         completion_percentage = int((completed_tasks / total_tasks) * 100)
 
+    activities = list(project.github_activities)
+    seven_days_ago = now - timedelta(days=7)
+    thirty_days_ago = now - timedelta(days=30)
+
+    github_commits = sum(1 for activity in activities if activity.activity_type == "commit")
+    github_pull_requests = sum(1 for activity in activities if activity.activity_type == "pull_request")
+    github_activity_7d = sum(1 for activity in activities if activity.timestamp >= seven_days_ago)
+    github_activity_30d = sum(1 for activity in activities if activity.timestamp >= thirty_days_ago)
+    last_github_activity_at = max((activity.timestamp for activity in activities), default=None)
+
+    health_score = 100
+    if total_tasks:
+        pending_ratio = pending_tasks / total_tasks
+        health_score -= int(pending_ratio * 30)
+    health_score -= min(overdue_tasks * 10, 40)
+
+    if project.github_repos and (
+        last_github_activity_at is None or last_github_activity_at < now - timedelta(days=14)
+    ):
+        health_score -= 15
+
+    if project.deadline and project.deadline < now and project.status != "completed":
+        health_score -= 15
+
+    health_score = max(0, min(100, health_score))
+    if health_score >= 80:
+        health_status = "healthy"
+    elif health_score >= 60:
+        health_status = "attention"
+    else:
+        health_status = "at_risk"
+
     analytics = {
         "total_tasks": total_tasks,
         "completed_tasks": completed_tasks,
         "completion_percentage": completion_percentage,
         "overdue_tasks": overdue_tasks,
-        "pending_tasks": pending_tasks
+        "pending_tasks": pending_tasks,
+        "github_commits": github_commits,
+        "github_pull_requests": github_pull_requests,
+        "github_activity_7d": github_activity_7d,
+        "github_activity_30d": github_activity_30d,
+        "last_github_activity_at": last_github_activity_at,
+        "health_score": health_score,
+        "health_status": health_status,
     }
 
     # Assign analytics manually before response validation
     # Since we are returning a Pydantic model directly
     response = ProjectDetailResponse.model_validate(project)
+    response.github_activities = sorted(
+        response.github_activities,
+        key=lambda activity: activity.timestamp,
+        reverse=True,
+    )
     response.analytics = analytics
     
     return response
