@@ -39,9 +39,8 @@ export function useWebSocket() {
 
         const configuredUrl = process.env.NEXT_PUBLIC_WS_URL;
         const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-        const baseUrl = configuredUrl || `${protocol}//${window.location.host}/api/v1/ws`;
-        const separator = baseUrl.includes("?") ? "&" : "?";
-        const ws = new WebSocket(`${baseUrl}${separator}ticket=${encodeURIComponent(data.ticket)}`);
+        const baseUrl = configuredUrl || protocol + "//" + window.location.host + "/api/v1/ws";
+        const ws = new WebSocket(baseUrl, ["tasknest-v1", data.ticket]);
 
         ws.onopen = () => {
           setIsConnected(true);
