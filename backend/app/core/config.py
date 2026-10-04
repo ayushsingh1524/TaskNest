@@ -8,14 +8,14 @@ class Settings(BaseSettings):
     # DATABASE
     POSTGRES_USER: str = "user"
     POSTGRES_PASSWORD: str = "password"
-    POSTGRES_DB: str = "devtrack"
+    POSTGRES_DB: str = "tasknest"
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: str = "5432"
     
     DATABASE_URL: str = ""
 
     # JWT SECURITY
-    SECRET_KEY: str = "your-super-secret-key-that-should-be-changed-in-production"
+    SECRET_KEY: str = ""
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
@@ -53,4 +53,6 @@ class Settings(BaseSettings):
         return f"postgresql+asyncpg://{self.POSTGRES_USER}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
 
 settings = Settings()
+if not settings.SECRET_KEY:
+    settings.SECRET_KEY = "tasknest-local-development-only"
 settings.DATABASE_URL = settings.get_database_url()
