@@ -8,6 +8,7 @@ from sqlalchemy.orm import selectinload
 from app.api import deps
 from app.models.user import User
 from app.models.note import Note, NoteVersion
+from app.models.project import Project
 from app.schemas.note import NoteCreate, NoteUpdate, NoteResponse, NoteDetailResponse
 from app.core.redis import redis_client
 
@@ -75,8 +76,19 @@ async def create_note(
     """
     Create a new note.
     """
+    note_data = note_in.model_dump()
+    if note_data.get("project_id") is not None:
+        project_result = await db.execute(
+            select(Project.id).where(
+                Project.id == note_data["project_id"],
+                Project.user_id == current_user.id,
+            )
+        )
+        if project_result.scalar_one_or_none() is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+
     note = Note(
-        **note_in.model_dump(),
+        **note_data,
         user_id=current_user.id
     )
     db.add(note)
@@ -130,6 +142,16 @@ async def update_note(
         raise HTTPException(status_code=404, detail="Note not found")
 
     update_data = note_in.model_dump(exclude_unset=True)
+
+    if "project_id" in update_data and update_data["project_id"] is not None:
+        project_result = await db.execute(
+            select(Project.id).where(
+                Project.id == update_data["project_id"],
+                Project.user_id == current_user.id,
+            )
+        )
+        if project_result.scalar_one_or_none() is None:
+            raise HTTPException(status_code=404, detail="Project not found")
     
     # Snapshot logic: if markdown_content is being updated and has changed
     if "markdown_content" in update_data and update_data["markdown_content"] != note.markdown_content:
