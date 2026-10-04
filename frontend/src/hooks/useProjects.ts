@@ -87,3 +87,20 @@ export const useLinkGithubRepo = () => {
     },
   });
 };
+
+
+export const useUnlinkGithubRepo = () => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ projectId, repoId }: { projectId: number; repoId: number }) =>
+      projectService.unlinkGithubRepo(projectId, repoId),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["project", variables.projectId] });
+      toast.success("GitHub repository unlinked");
+    },
+    onError: (error: any) => {
+      toast.error(error.response?.data?.detail || "Failed to unlink repository");
+    },
+  });
+};
