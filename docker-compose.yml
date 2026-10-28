@@ -23,7 +23,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     environment:
-      - DATABASE_URL=postgresql+asyncpg://user:password@postgres:5432/devtrack
+      - DATABASE_URL=postgresql+asyncpg://user:password@postgres:5432/tasknest
       - REDIS_URL=redis://redis:6379/0
     depends_on:
       - postgres
@@ -34,7 +34,7 @@ services:
     environment:
       POSTGRES_USER: user
       POSTGRES_PASSWORD: password
-      POSTGRES_DB: devtrack
+      POSTGRES_DB: tasknest
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
@@ -49,7 +49,7 @@ services:
       dockerfile: Dockerfile
     command: celery -A app.workers.celery_app worker --loglevel=info
     environment:
-      - DATABASE_URL=postgresql+asyncpg://user:password@postgres:5432/devtrack
+      - DATABASE_URL=postgresql+asyncpg://user:password@postgres:5432/tasknest
       - REDIS_URL=redis://redis:6379/0
     depends_on:
       - backend

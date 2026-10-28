@@ -2,13 +2,13 @@ import os
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
-    PROJECT_NAME: str = "DevTrack"
+    PROJECT_NAME: str = "TaskNest"
     API_V1_STR: str = "/api/v1"
     
     # DATABASE
     POSTGRES_USER: str = "user"
     POSTGRES_PASSWORD: str = "password"
-    POSTGRES_DB: str = "devtrack"
+    POSTGRES_DB: str = "tasknest"
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: str = "5432"
     
